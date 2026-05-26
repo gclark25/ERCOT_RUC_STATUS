@@ -141,12 +141,10 @@ def fetch_all_onruc(token: str) -> pd.DataFrame:
             print("  No more rows.")
             break
 
-        # Convert to dicts
+        # Convert to dicts and keep all rows (already filtered to ONRUC server-side)
         for row in rows:
             record = dict(zip(fields, row))
-            # Filter to ONRUC only (case-insensitive safety check)
-            if str(record.get("operatingMode", "")).upper() == "ONRUC":
-                all_rows.append(record)
+            all_rows.append(record)
 
         print(f"  → {len(rows):,} records on this page | ONRUC kept so far: {len(all_rows):,}")
 
