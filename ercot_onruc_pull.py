@@ -88,11 +88,12 @@ def make_headers(token):
 # ─── FETCH ────────────────────────────────────────────────────────────────────
 
 def fetch_page(headers, page: int, start: str, end: str) -> dict:
-    """Fetch one page of COP snapshot data filtered to a date range."""
+    """Fetch one page of COP snapshot data filtered to ONRUC only."""
     url = f"{BASE_URL}{ENDPOINT}"
     params = {
         "deliveryDateFrom": start,
         "deliveryDateTo":   end,
+        "status":           "ONRUC",
         "size":             PAGE_SIZE,
         "page":             page,
     }
@@ -125,9 +126,14 @@ def fetch_all_onruc(token: str) -> pd.DataFrame:
         fields = data.get("fields", [])
         rows   = data.get("data", [])
 
+        # fields is a list of dicts like {'name': 'deliveryDate', 'label': ...}
+        # extract just the name strings
+        if fields and isinstance(fields[0], dict):
+            fields = [f["name"] for f in fields]
+
         if total is None:
             total = meta.get("totalRecords", 0)
-            print(f"Total records in range: {total:,}")
+            print(f"Total ONRUC records in range: {total:,}")
             if fields:
                 print(f"  Columns: {fields}")
 
@@ -174,12 +180,12 @@ def clean_and_save(df: pd.DataFrame):
     # Build output with the fields we care about.
     # Column names may vary slightly — map common variants.
     col_map = {
-        "resource":        ["resource", "resourcename", "resource_name", "duns"],
-        "operatingdate":   ["operatingdate", "operating_date", "deliverydate", "delivery_date"],
-        "hourending":      ["hourending", "hour_ending", "deliveryhour", "delivery_hour", "intervalending"],
-        "hsl":             ["hsl", "highsustainedlimit", "high_sustained_limit"],
-        "operatingmode":   ["operatingmode", "operating_mode", "resourcestatus", "resource_status"],
-        "postdatetime":    ["postdatetime", "post_datetime", "postdate", "post_date"],
+        "resource":        ["resourceName"],
+        "qse":             ["qseName"],
+        "operatingdate":   ["deliveryDate"],
+        "hourending":      ["hourEnding"],
+        "hsl":             ["highSustainedLimit"],
+        "operatingmode":   ["status"],
     }
 
     out = {}
