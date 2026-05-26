@@ -91,8 +91,8 @@ def fetch_page(headers, page: int, start: str, end: str) -> dict:
     """Fetch one page of COP snapshot data filtered to a date range."""
     url = f"{BASE_URL}{ENDPOINT}"
     params = {
-        "postDatetimeFrom": f"{start}T00:00:00",
-        "postDatetimeTo":   f"{end}T23:59:59",
+        "deliveryDateFrom": start,
+        "deliveryDateTo":   end,
         "size":             PAGE_SIZE,
         "page":             page,
     }
