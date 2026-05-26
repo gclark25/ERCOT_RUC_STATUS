@@ -178,11 +178,11 @@ def clean_and_save(df: pd.DataFrame):
     # Build output with the fields we care about.
     # Column names may vary slightly — map common variants.
     col_map = {
-        "resource":        ["resourceName"],
-        "qse":             ["qseName"],
-        "operatingdate":   ["deliveryDate"],
-        "hourending":      ["hourEnding"],
-        "hsl":             ["highSustainedLimit"],
+        "resource":        ["resourcename"],
+        "qse":             ["qsename"],
+        "operatingdate":   ["deliverydate"],
+        "hourending":      ["hourending"],
+        "hsl":             ["highsustainedlimit"],
         "operatingmode":   ["status"],
     }
 
