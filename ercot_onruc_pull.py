@@ -46,7 +46,7 @@ AUTH_URL      = (
 # NP1-301: 60-Day COP Adjustment Period Snapshot — contains operatingMode + hsl
 ENDPOINT      = "/np1-301/60_cop_adj_period_snapshot"
 CLIENT_ID     = "fec253ea-0d06-4272-a5e6-b478baeecd70"
-SCOPE         = f"openid+{CLIENT_ID}+offline_access"
+SCOPE         = f"openid {CLIENT_ID} offline_access"
 
 START_DATE    = "2025-01-01"
 # Data is on a 60-day lag; pull up to today and let the API return what's posted
