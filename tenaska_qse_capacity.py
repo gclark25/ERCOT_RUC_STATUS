@@ -9,7 +9,7 @@ Actions Secrets (Settings → Secrets and variables → Actions):
 
   ERCOT_USERNAME   your ERCOT Public API login email
   ERCOT_PASSWORD   your ERCOT Public API password
-  ERCOT_SUB_KEY    your Ocp-Apim-Subscription-Key
+  ERCOT_SUBSCRIPTION_KEY    your Ocp-Apim-Subscription-Key
 
 Optional env vars (override defaults):
   QSE_NAME   full registered name filter  (default: TENASKA POWER SERVICES CO)
@@ -31,7 +31,7 @@ from pathlib import Path
 # ─── CREDENTIALS (from GitHub Actions Secrets / env vars) ────────────────────
 ERCOT_USERNAME = os.getenv("ERCOT_USERNAME", "")
 ERCOT_PASSWORD = os.getenv("ERCOT_PASSWORD", "")
-ERCOT_SUB_KEY  = os.getenv("ERCOT_SUB_KEY",  "")
+ERCOT_SUBSCRIPTION_KEY  = os.getenv("ERCOT_SUBSCRIPTION_KEY",  "")
 
 # ─── TARGET QSE — exact ERCOT registered identifiers ─────────────────────────
 QSE_NAME = os.getenv("QSE_NAME", "TENASKA POWER SERVICES CO").upper().strip()
@@ -73,7 +73,7 @@ def fetch_all_pages(endpoint: str, token: str, params: dict = None) -> list[dict
     """Pages through all results from an ERCOT API endpoint."""
     headers = {
         "Authorization":             f"Bearer {token}",
-        "Ocp-Apim-Subscription-Key": ERCOT_SUB_KEY,
+        "Ocp-Apim-Subscription-Key": ERCOT_SUBSCRIPTION_KEY,
     }
     url      = f"{BASE_URL}{endpoint}"
     page     = 1
