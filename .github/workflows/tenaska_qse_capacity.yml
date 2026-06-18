@@ -33,7 +33,7 @@ jobs:
         env:
           ERCOT_USERNAME: ${{ secrets.ERCOT_USERNAME }}
           ERCOT_PASSWORD: ${{ secrets.ERCOT_PASSWORD }}
-          ERCOT_SUB_KEY:  ${{ secrets.ERCOT_SUB_KEY }}
+          ERCOT_SUBSCRIPTION_KEY:  ${{ secrets.ERCOT_SUBSCRIPTION_KEY }}
           QSE_NAME:       ${{ github.event.inputs.qse_name }}
           QSE_CODE:       ${{ github.event.inputs.qse_code }}
         run: python tenaska_qse_capacity.py
