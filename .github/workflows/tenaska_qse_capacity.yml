@@ -3,10 +3,14 @@ name: Tenaska QSE Capacity Query
 on:
   workflow_dispatch:          # Manual trigger from the Actions tab
     inputs:
-      qse_search_term:
-        description: 'QSE name search term (default: TENASKA)'
+      qse_name:
+        description: 'QSE full name override (default: TENASKA POWER SERVICES CO)'
         required: false
-        default: 'TENASKA'
+        default: 'TENASKA POWER SERVICES CO'
+      qse_code:
+        description: 'QSE short code override (default: QTENSK)'
+        required: false
+        default: 'QTENSK'
 
 jobs:
   query-ercot:
@@ -30,7 +34,8 @@ jobs:
           ERCOT_USERNAME: ${{ secrets.ERCOT_USERNAME }}
           ERCOT_PASSWORD: ${{ secrets.ERCOT_PASSWORD }}
           ERCOT_SUB_KEY:  ${{ secrets.ERCOT_SUB_KEY }}
-          QSE_SEARCH_TERM: ${{ github.event.inputs.qse_search_term }}
+          QSE_NAME:       ${{ github.event.inputs.qse_name }}
+          QSE_CODE:       ${{ github.event.inputs.qse_code }}
         run: python tenaska_qse_capacity.py
 
       - name: Upload results CSV
