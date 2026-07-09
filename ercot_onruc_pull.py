@@ -3,7 +3,7 @@ ERCOT COP ONRUC Status Pull
 ============================
 Pulls all resource hours with status ONRUC from the ERCOT Public API
 using the NP1-301 (60-Day COP Adjustment Period Snapshot) endpoint.
-Captures: resource name, operating date, hour ending, HSL, and post datetime.
+Captures: resource name, operating date, hour ending, HSL, QSE, and status.
 
 SETUP
 -----
@@ -13,26 +13,26 @@ SETUP
 
 USAGE
 -----
-    pip install requests pandas
+    pip install requests pandas openpyxl
     python ercot_onruc_pull.py
 
 OUTPUT
 ------
-    ercot_onruc_2025_present.csv  — all ONRUC records since 2025-01-01
+    ercot_onruc_2023_present.csv   — raw CSV of all ONRUC records since 2023-01-01
+    ercot_onruc_2023_present.xlsx  — formatted Excel with Summary + one tab per month
 """
 
 import os
 import time
 import requests
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.formatting.rule import ColorScaleRule
 
 # ─── CREDENTIALS ──────────────────────────────────────────────────────────────
-# Set these directly or export as environment variables:
-#   export ERCOT_USERNAME="your@email.com"
-#   export ERCOT_PASSWORD="yourpassword"
-#   export ERCOT_SUBSCRIPTION_KEY="yoursubscriptionkey"
-
 USERNAME         = os.getenv("ERCOT_USERNAME",         "YOUR_EMAIL")
 PASSWORD         = os.getenv("ERCOT_PASSWORD",         "YOUR_PASSWORD")
 SUBSCRIPTION_KEY = os.getenv("ERCOT_SUBSCRIPTION_KEY", "YOUR_SUBSCRIPTION_KEY")
@@ -43,23 +43,21 @@ AUTH_URL      = (
     "https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com"
     "/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token"
 )
-# NP1-301: 60-Day COP Adjustment Period Snapshot — contains operatingMode + hsl
 ENDPOINT      = "/np1-301/60_cop_adj_period_snapshot"
 CLIENT_ID     = "fec253ea-0d06-4272-a5e6-b478baeecd70"
 SCOPE         = f"openid {CLIENT_ID} offline_access"
 
-START_DATE    = "2025-01-01"
-# Data is on a 60-day lag; pull up to today and let the API return what's posted
+START_DATE    = "2023-01-01"
 END_DATE      = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-PAGE_SIZE     = 10000   # max rows per page
-SLEEP_SECONDS = 0.3     # rate-limit courtesy delay between pages
-OUTPUT_FILE   = "ercot_onruc_2025_present.csv"
+PAGE_SIZE     = 10000
+SLEEP_SECONDS = 0.3
+OUTPUT_CSV    = "ercot_onruc_2023_present.csv"
+OUTPUT_XLSX   = "ercot_onruc_2023_present.xlsx"
 
 # ─── AUTH ─────────────────────────────────────────────────────────────────────
 
 def get_id_token():
-    """Authenticate and return the id_token (valid 1 hour)."""
     params = {
         "username":      USERNAME,
         "password":      PASSWORD,
@@ -79,16 +77,15 @@ def get_id_token():
 
 def make_headers(token):
     return {
-        "Authorization":           f"Bearer {token}",
+        "Authorization":            f"Bearer {token}",
         "Ocp-Apim-Subscription-Key": SUBSCRIPTION_KEY,
-        "Accept":                  "application/json",
+        "Accept":                   "application/json",
     }
 
 
 # ─── FETCH ────────────────────────────────────────────────────────────────────
 
-def fetch_page(headers, page: int, start: str, end: str) -> dict:
-    """Fetch one page of COP snapshot data filtered to ONRUC only."""
+def fetch_page(headers, page, start, end):
     url = f"{BASE_URL}{ENDPOINT}"
     params = {
         "deliveryDateFrom": start,
@@ -104,11 +101,7 @@ def fetch_page(headers, page: int, start: str, end: str) -> dict:
     return resp.json()
 
 
-def fetch_all_onruc(token: str) -> pd.DataFrame:
-    """
-    Paginate through all COP snapshot records from START_DATE to END_DATE,
-    filter to operatingMode == 'ONRUC', and return a DataFrame.
-    """
+def fetch_all_onruc(token):
     headers  = make_headers(token)
     all_rows = []
     page     = 1
@@ -121,36 +114,27 @@ def fetch_all_onruc(token: str) -> pd.DataFrame:
         print(f"  Page {page}" + (f" / {-(-total // PAGE_SIZE)}" if total else "") + " ...", end=" ")
         data = fetch_page(headers, page, START_DATE, END_DATE)
 
-        # Response shape: { "data": [[col1, col2, ...], ...], "fields": [...], "_meta": {...} }
         meta   = data.get("_meta", {})
         fields = data.get("fields", [])
         rows   = data.get("data", [])
 
-        # fields is a list of dicts like {'name': 'deliveryDate', 'label': ...}
-        # extract just the name strings
         if fields and isinstance(fields[0], dict):
             fields = [f["name"] for f in fields]
 
         if total is None:
             total = meta.get("totalRecords", 0)
             print(f"Total ONRUC records in range: {total:,}")
-            if fields:
-                print(f"  Columns: {fields}")
 
         if not rows:
             print("  No more rows.")
             break
 
-        # Convert to dicts and keep all rows (already filtered to ONRUC server-side)
         for row in rows:
-            record = dict(zip(fields, row))
-            all_rows.append(record)
+            all_rows.append(dict(zip(fields, row)))
 
-        print(f"  → {len(rows):,} records on this page | ONRUC kept so far: {len(all_rows):,}")
+        print(f"  → {len(rows):,} on this page | total so far: {len(all_rows):,}")
 
-        # Check if we've read all pages
-        retrieved = page * PAGE_SIZE
-        if retrieved >= total or len(rows) < PAGE_SIZE:
+        if page * PAGE_SIZE >= total or len(rows) < PAGE_SIZE:
             break
 
         page += 1
@@ -160,30 +144,21 @@ def fetch_all_onruc(token: str) -> pd.DataFrame:
         print("\nNo ONRUC records found in the date range.")
         return pd.DataFrame()
 
-    df = pd.DataFrame(all_rows)
-    return df
+    return pd.DataFrame(all_rows)
 
 
 # ─── PROCESS ──────────────────────────────────────────────────────────────────
 
-def clean_and_save(df: pd.DataFrame):
-    """Select relevant columns, sort, and save to CSV."""
-
-    # Normalise column names to lowercase for safe access
+def build_result(df):
     df.columns = [c.lower() for c in df.columns]
 
-    # Print all available columns so user can see what came back
-    print(f"\nColumns returned by API: {list(df.columns)}")
-
-    # Build output with the fields we care about.
-    # Column names may vary slightly — map common variants.
     col_map = {
-        "resource":        ["resourcename"],
-        "qse":             ["qsename"],
-        "operatingdate":   ["deliverydate"],
-        "hourending":      ["hourending"],
-        "hsl":             ["highsustainedlimit"],
-        "operatingmode":   ["status"],
+        "resource":      ["resourcename"],
+        "qse":           ["qsename"],
+        "operatingdate": ["deliverydate"],
+        "hourending":    ["hourending"],
+        "hsl":           ["highsustainedlimit"],
+        "status":        ["status"],
     }
 
     out = {}
@@ -193,38 +168,202 @@ def clean_and_save(df: pd.DataFrame):
                 out[target] = df[c]
                 break
         if target not in out:
-            print(f"  WARNING: could not find column for '{target}' — will be blank")
             out[target] = None
 
     result = pd.DataFrame(out)
+    result["hsl"] = pd.to_numeric(result["hsl"], errors="coerce")
+    result["operatingdate"] = pd.to_datetime(result["operatingdate"])
 
-    # Clean up types
-    for col in ["hsl"]:
-        if col in result.columns:
-            result[col] = pd.to_numeric(result[col], errors="coerce")
+    # Parse HE from hourending (hour value IS the HE number: 01:00 = HE1, 24:00 = HE24)
+    def time_to_he(t):
+        try:
+            h = int(str(t).split(":")[0])
+            return h if h > 0 else 24
+        except:
+            return None
 
-    # Sort by operating date, hour, then resource
-    sort_cols = [c for c in ["operatingdate", "hourending", "resource"] if c in result.columns]
-    if sort_cols:
-        result.sort_values(sort_cols, inplace=True)
+    result["he"] = result["hourending"].apply(time_to_he)
 
-    result.to_csv(OUTPUT_FILE, index=False)
-    print(f"\n{'='*60}")
-    print(f"  Saved {len(result):,} ONRUC records to: {OUTPUT_FILE}")
-    print(f"{'='*60}")
-
-    # Print a quick summary
-    if "resource" in result.columns:
-        top = result["resource"].value_counts().head(15)
-        print(f"\nTop 15 most-frequently RUC-committed resources (by record count):")
-        print(top.to_string())
-
-    if "operatingdate" in result.columns:
-        by_date = result.groupby("operatingdate").size().rename("onruc_records")
-        print(f"\nRecords per operating date (first 20):")
-        print(by_date.head(20).to_string())
-
+    result = result.sort_values(["operatingdate", "he", "resource"]).reset_index(drop=True)
     return result
+
+
+# ─── EXCEL OUTPUT ─────────────────────────────────────────────────────────────
+
+# Styles
+NAVY  = PatternFill("solid", fgColor="0D1B3E")
+STEEL = PatternFill("solid", fgColor="1C3A6E")
+WHITE = PatternFill("solid", fgColor="FFFFFF")
+ALT   = PatternFill("solid", fgColor="E2EAF6")
+RED   = PatternFill("solid", fgColor="FDECEA")
+
+HDR_F   = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+BODY_F  = Font(name="Arial", size=10)
+TITLE_F = Font(name="Arial", bold=True, color="0D1B3E", size=13)
+SUB_F   = Font(name="Arial", color="64748B", size=9)
+BOLD_F  = Font(name="Arial", bold=True, color="0D1B3E", size=10)
+
+CTR  = Alignment(horizontal="center", vertical="center")
+LFT  = Alignment(horizontal="left",   vertical="center")
+WRP  = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+thin = Side(style="thin", color="D1DAE8")
+BDR  = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+def hdr(ws, row, col, val):
+    c = ws.cell(row=row, column=col, value=val)
+    c.font = HDR_F; c.fill = NAVY; c.alignment = CTR; c.border = BDR
+
+def bc(ws, row, col, val, align=CTR, font=None, fill=None):
+    c = ws.cell(row=row, column=col, value=val)
+    c.font = font or BODY_F; c.alignment = align; c.border = BDR
+    if fill: c.fill = fill
+
+def set_widths(ws, widths):
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+def title_block(ws, t1, t2, span):
+    ws.merge_cells(f"A1:{get_column_letter(span)}1")
+    c = ws["A1"]; c.value = t1; c.font = TITLE_F; c.alignment = LFT
+    ws.merge_cells(f"A2:{get_column_letter(span)}2")
+    c = ws["A2"]; c.value = t2; c.font = SUB_F; c.alignment = LFT
+    ws.row_dimensions[3].height = 6
+
+
+def build_summary_sheet(ws, df):
+    """One row per (date × resource) — full dataset."""
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A5"
+    title_block(ws,
+        f"ERCOT ONRUC Commitments — {START_DATE} to present",
+        "Source: ERCOT Public API NP1-301 (60-Day COP Snapshot)  ·  ONRUC = unit committed for RUC  ·  One row per resource per operating day",
+        8)
+
+    hdrs = ["Operating Date", "Resource", "QSE", "HE Range", "HSL (MW)", "Status", "Month", "Year"]
+    for i, h in enumerate(hdrs, 1):
+        hdr(ws, 4, i, h)
+
+    # Deduplicate to one row per (date, resource) with HE range
+    def he_range(nums):
+        nums = sorted(set([int(n) for n in nums if n is not None]))
+        if not nums: return ""
+        if len(nums) == 1: return f"HE{nums[0]}"
+        if nums == list(range(nums[0], nums[-1]+1)):
+            return f"HE{nums[0]}–HE{nums[-1]}"
+        return ", ".join(f"HE{n}" for n in nums)
+
+    dedup = (df.groupby(["operatingdate", "resource"])
+               .agg(he_range_=("he", he_range),
+                    hsl=("hsl", "first"),
+                    qse=("qse", "first"),
+                    status=("status", "first"))
+               .reset_index())
+    dedup = dedup.sort_values(["operatingdate", "resource"]).reset_index(drop=True)
+
+    for idx, row in enumerate(dedup.itertuples(index=False), 5):
+        f = ALT if idx % 2 == 0 else WHITE
+        ws.row_dimensions[idx].height = 18
+        try:
+            date_str = row.operatingdate.strftime("%-m/%-d/%Y")
+            month_str = row.operatingdate.strftime("%b %Y")
+            year_str  = str(row.operatingdate.year)
+        except:
+            date_str = month_str = year_str = str(row.operatingdate)[:10]
+
+        bc(ws, idx, 1, date_str,          CTR, BOLD_F, f)
+        bc(ws, idx, 2, row.resource,      LFT, fill=f)
+        bc(ws, idx, 3, row.qse,           CTR, fill=f)
+        bc(ws, idx, 4, row.he_range_,     CTR, fill=f)
+        hsl_val = int(row.hsl) if pd.notna(row.hsl) else "N/A"
+        bc(ws, idx, 5, hsl_val,           CTR, fill=f)
+        bc(ws, idx, 6, row.status,        CTR, fill=f)
+        bc(ws, idx, 7, month_str,         CTR, fill=f)
+        bc(ws, idx, 8, year_str,          CTR, fill=f)
+
+    set_widths(ws, [14, 22, 16, 16, 12, 10, 12, 8])
+
+    # Color scale on HSL column
+    last = 4 + len(dedup)
+    ws.conditional_formatting.add(
+        f"E5:E{last}",
+        ColorScaleRule(start_type="min", start_color="FFFFFF",
+                       end_type="max",   end_color="C0392B")
+    )
+
+
+def build_month_sheet(ws, df_month, month_label):
+    """One row per (date × resource) for a single month."""
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A5"
+    title_block(ws,
+        f"ERCOT ONRUC Commitments — {month_label}",
+        "Source: ERCOT Public API NP1-301  ·  ONRUC status = unit committed for RUC  ·  One row per resource per day",
+        6)
+
+    hdrs = ["Operating Date", "Resource", "QSE", "HE Range", "HSL (MW)", "Status"]
+    for i, h in enumerate(hdrs, 1):
+        hdr(ws, 4, i, h)
+
+    def he_range(nums):
+        nums = sorted(set([int(n) for n in nums if n is not None]))
+        if not nums: return ""
+        if len(nums) == 1: return f"HE{nums[0]}"
+        if nums == list(range(nums[0], nums[-1]+1)):
+            return f"HE{nums[0]}–HE{nums[-1]}"
+        return ", ".join(f"HE{n}" for n in nums)
+
+    dedup = (df_month.groupby(["operatingdate", "resource"])
+                     .agg(he_range_=("he", he_range),
+                          hsl=("hsl", "first"),
+                          qse=("qse", "first"),
+                          status=("status", "first"))
+                     .reset_index()
+                     .sort_values(["operatingdate", "resource"])
+                     .reset_index(drop=True))
+
+    for idx, row in enumerate(dedup.itertuples(index=False), 5):
+        f = ALT if idx % 2 == 0 else WHITE
+        ws.row_dimensions[idx].height = 18
+        try:
+            date_str = row.operatingdate.strftime("%-m/%-d/%Y")
+        except:
+            date_str = str(row.operatingdate)[:10]
+
+        bc(ws, idx, 1, date_str,       CTR, BOLD_F, f)
+        bc(ws, idx, 2, row.resource,   LFT, fill=f)
+        bc(ws, idx, 3, row.qse,        CTR, fill=f)
+        bc(ws, idx, 4, row.he_range_,  CTR, fill=f)
+        hsl_val = int(row.hsl) if pd.notna(row.hsl) else "N/A"
+        bc(ws, idx, 5, hsl_val,        CTR, fill=f)
+        bc(ws, idx, 6, row.status,     CTR, fill=f)
+
+    set_widths(ws, [14, 22, 16, 16, 12, 10])
+
+
+def save_excel(result):
+    print(f"\nBuilding Excel workbook ...")
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    # Summary tab
+    ws_sum = wb.create_sheet("Summary")
+    build_summary_sheet(ws_sum, result)
+    print("  Summary tab built")
+
+    # One tab per month, ordered chronologically
+    result["month_period"] = result["operatingdate"].dt.to_period("M")
+    for period in sorted(result["month_period"].unique()):
+        label = period.strftime("%b %Y")
+        df_m = result[result["month_period"] == period]
+        ws = wb.create_sheet(label)
+        build_month_sheet(ws, df_m, label)
+        print(f"  {label}: {df_m['resource'].nunique()} resources, {df_m['operatingdate'].nunique()} event days")
+
+    wb.save(OUTPUT_XLSX)
+    print(f"\n{'='*60}")
+    print(f"  Saved Excel: {OUTPUT_XLSX}")
+    print(f"  Tabs: Summary + {len(wb.sheetnames)-1} monthly tabs")
+    print(f"{'='*60}")
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
@@ -238,8 +377,7 @@ def main():
 
     if "YOUR_EMAIL" in USERNAME or "YOUR_SUBSCRIPTION_KEY" in SUBSCRIPTION_KEY:
         print("\n⚠  CREDENTIALS NOT SET")
-        print("   Edit this script and set USERNAME, PASSWORD, SUBSCRIPTION_KEY")
-        print("   or export them as environment variables:")
+        print("   Export as environment variables:")
         print("     export ERCOT_USERNAME='your@email.com'")
         print("     export ERCOT_PASSWORD='yourpassword'")
         print("     export ERCOT_SUBSCRIPTION_KEY='yourkey'")
@@ -253,11 +391,27 @@ def main():
     df = fetch_all_onruc(token)
 
     if df.empty:
-        print("No data returned. Verify date range and that data is within the 60-day posting window.")
+        print("No data returned.")
         return
 
-    print("\nStep 3: Processing and saving ...")
-    clean_and_save(df)
+    print("\nStep 3: Processing ...")
+    result = build_result(df)
+
+    print("\nStep 4: Saving CSV ...")
+    result.to_csv(OUTPUT_CSV, index=False)
+    print(f"  Saved {len(result):,} records to {OUTPUT_CSV}")
+
+    print("\nStep 5: Building Excel ...")
+    save_excel(result)
+
+    # Quick summary
+    dedup = result.drop_duplicates(subset=["operatingdate", "resource"])
+    print(f"\nQuick stats:")
+    print(f"  Event days:        {dedup['operatingdate'].nunique():,}")
+    print(f"  Unique resources:  {dedup['resource'].nunique():,}")
+    print(f"  Total records:     {len(dedup):,}")
+    print(f"\nTop 10 most RUC-committed resources:")
+    print(dedup["resource"].value_counts().head(10).to_string())
 
 
 if __name__ == "__main__":
