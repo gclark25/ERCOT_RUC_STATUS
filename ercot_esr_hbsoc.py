@@ -68,10 +68,11 @@ def fetch_page(hdrs, page):
     resp.raise_for_status()
     return resp.json()
 
-def fetch_all(token, esr_ids, id_to_gen):
+def fetch_all(token):
     hdrs = headers(token)
     all_rows, page, total = [], 1, None
-    print(f"\nFetching COP data: {START_DATE} → {END_DATE}\n")
+    print(f"\nFetching COP data: {START_DATE} → {END_DATE}")
+    print("Filtering to resources with hourBeginningPlannedSOC values (ESRs only) ...\n")
     while True:
         print(f"  Page {page}" + (f"/{-(-total//PAGE_SIZE)}" if total else "") + " ...", end=" ")
         data = fetch_page(hdrs, page)
@@ -83,24 +84,19 @@ def fetch_all(token, esr_ids, id_to_gen):
         if total is None:
             total = meta.get("totalRecords", 0)
             print(f"Total records: {total:,}")
+            # Find hbsoc column index once
+            hbsoc_idx = fields.index("hourBeginningPlannedSOC") if "hourBeginningPlannedSOC" in fields else None
+            print(f"  hourBeginningPlannedSOC column index: {hbsoc_idx}")
         if not rows:
             break
-
-        # Debug page 1: show sample resource names to verify matching
-        if page == 1:
-            sample = [dict(zip(fields, r)).get("resourceName","") for r in rows[:50]]
-            unique_sample = sorted(set(sample))[:20]
-            print(f"\n  DEBUG — sample resourceNames from API: {unique_sample}")
-            esr_sample = sorted(list(esr_ids))[:20]
-            print(f"  DEBUG — sample ESR IDs we match against: {esr_sample}\n")
-
         kept = 0
         for row in rows:
-            r = dict(zip(fields, row))
-            rname = r.get("resourceName", "")
-            if rname in esr_ids:
-                all_rows.append(r)
-                kept += 1
+            # Only keep rows where hbsoc is not null/zero — these are ESRs
+            if hbsoc_idx is not None:
+                hbsoc_val = row[hbsoc_idx]
+                if hbsoc_val is not None and hbsoc_val != 0:
+                    all_rows.append(dict(zip(fields, row)))
+                    kept += 1
         print(f"  {len(rows):,} rows, {kept} ESR rows kept (total: {len(all_rows):,})")
         if page * PAGE_SIZE >= total or len(rows) < PAGE_SIZE:
             break
@@ -547,7 +543,7 @@ def main():
     token = get_token()
 
     print("\nStep 2: Fetching COP data ...")
-    df = fetch_all(token, esr_ids, id_to_gen)
+    df = fetch_all(token)
 
     if df.empty:
         print("No data returned.")
