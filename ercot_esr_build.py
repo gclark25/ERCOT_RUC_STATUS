@@ -47,6 +47,12 @@ def load_and_process():
     df["hbsoc"] = pd.to_numeric(df["hbsoc"], errors="coerce")
     df["hsl"]   = pd.to_numeric(df["hsl"],   errors="coerce")
 
+    # Calculate SOC as a percentage of HSL
+    # HBSOC is in MW — divide by HSL (MW) and multiply by 100 to get %
+    df["soc_pct"] = (df["hbsoc"] / df["hsl"] * 100).round(1)
+    # Clamp to 0-100 in case of any data anomalies
+    df["soc_pct"] = df["soc_pct"].clip(0, 100)
+
     # Parse HE: 01:00 = HE1, 24:00 = HE24
     def to_he(t):
         try:
@@ -115,9 +121,10 @@ def build_summary(df):
             ddf = ddf.sort_values("he")
             key = pd.Timestamp(d).strftime("%-m/%-d/%Y")
             series[key] = {
-                "he":    ddf["he"].tolist(),
-                "hbsoc": [round(v, 1) if pd.notna(v) else None for v in ddf["hbsoc"].tolist()],
-                "flat":  bool(ddf["is_flat"].any()),
+                "he":      ddf["he"].tolist(),
+                "hbsoc":   [round(v, 1) if pd.notna(v) else None for v in ddf["hbsoc"].tolist()],
+                "soc_pct": [round(v, 1) if pd.notna(v) else None for v in ddf["soc_pct"].tolist()],
+                "flat":    bool(ddf["is_flat"].any()),
             }
         summary.append({
             "resource":   res,
@@ -198,7 +205,7 @@ def build_html(summary, total_esrs, flat_esr_count, flat_day_total):
 <div class="header">
   <div>
     <div class="header h1" style="font-size:17px;font-weight:700;">ERCOT ESR — Hour Beginning Planned SOC</div>
-    <div class="sub">Energy Storage Resources · Jan 1 – May 30, 2026 · Source: NP1-301 COP Snapshot</div>
+    <div class="sub">Energy Storage Resources · Jan 1 – May 30, 2026 · HBSOC shown as % of HSL · Source: NP1-301 COP Snapshot</div>
   </div>
   <div class="badge" id="flat-badge">Loading...</div>
 </div>
@@ -322,8 +329,9 @@ function renderChart(){{
   const datasets=dates.map((d,i)=>{{
     const s=a.series[d];
     return{{label:d+(s.flat?' ⚠':''),
-      data:s.he.map((h,j)=>({{x:h,y:s.hbsoc[j]}})),
+      data:s.he.map((h,j)=>({{x:h,y:s.soc_pct?s.soc_pct[j]:null}})),
       borderColor:s.flat?FLAT_C:PAL[i%PAL.length],
+      _raw:s.hbsoc,
       backgroundColor:'transparent',
       borderWidth:s.flat?2.5:1.2,
       pointRadius:dates.length>60?0:1.5,
