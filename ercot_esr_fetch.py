@@ -61,23 +61,29 @@ def make_headers(token):
     }
 
 # ── FETCH ─────────────────────────────────────────────────────────────────────
-def fetch_page(hdrs, page, retries=3):
+def fetch_page(hdrs, page, retries=5):
     for attempt in range(retries):
         try:
             resp = requests.get(f"{BASE_URL}{ENDPOINT}", headers=hdrs, params={
                 "deliveryDateFrom": START_DATE, "deliveryDateTo": END_DATE,
                 "size": PAGE_SIZE, "page": page,
-            }, timeout=120)
+            }, timeout=180)
             if resp.status_code == 401:
                 raise PermissionError("401 Unauthorized — token expired")
+            if resp.status_code == 503:
+                if attempt < retries - 1:
+                    wait = (attempt + 1) * 30
+                    print(f"\n  503 on page {page}, waiting {wait}s before retry (attempt {attempt+2}/{retries})...", end=" ", flush=True)
+                    time.sleep(wait)
+                    continue
             resp.raise_for_status()
             return resp.json()
         except PermissionError:
-            raise  # don't retry 401s — need fresh token
+            raise
         except Exception as e:
             if attempt < retries - 1:
-                wait = (attempt + 1) * 10
-                print(f"\n  Timeout, retrying in {wait}s...", end=" ", flush=True)
+                wait = (attempt + 1) * 15
+                print(f"\n  Error: {e} — retrying in {wait}s...", end=" ", flush=True)
                 time.sleep(wait)
             else:
                 raise
@@ -153,10 +159,12 @@ def main():
                 print(f"  Progress saved at page {page}. Just re-run the script.")
                 break
             except Exception as e:
-                print(f"\n  Error: {e}")
-                save_progress(page)
-                print(f"  Progress saved at page {page}. Re-run to continue.")
-                break
+                print(f"\n  Page {page} failed after all retries: {e}")
+                print(f"  Skipping page {page} and continuing...")
+                save_progress(page + 1)
+                page += 1
+                time.sleep(5)
+                continue
 
             meta = data.get("_meta", {})
             raw_fields = data.get("fields", [])
