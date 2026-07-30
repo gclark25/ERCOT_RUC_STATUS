@@ -86,8 +86,17 @@ def load_and_process():
 
     meta["core"] = meta["generator_id"].apply(get_core)
     meta["sp_core"] = meta["settlement_point_name"].apply(lambda x: get_core(x) if pd.notna(x) else '')
-    meta_gen = {r["core"]: r for _, r in meta.iterrows() if r["core"]}
-    meta_sp  = {r["sp_core"]: r for _, r in meta.iterrows() if r["sp_core"]}
+    meta_gen = {}
+    for _, r in meta.iterrows():
+        c = r["core"]
+        if c and c not in meta_gen:
+            meta_gen[c] = r.to_dict()
+
+    meta_sp = {}
+    for _, r in meta.iterrows():
+        c = r["sp_core"]
+        if c and c not in meta_sp:
+            meta_sp[c] = r.to_dict()
 
     def lookup_meta(resource):
         core = get_core(resource)
