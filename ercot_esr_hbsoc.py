@@ -68,7 +68,7 @@ def fetch_page(hdrs, page):
     resp.raise_for_status()
     return resp.json()
 
-def fetch_all(token, esr_ids):
+def fetch_all(token, esr_ids, id_to_gen):
     hdrs = headers(token)
     all_rows, page, total = [], 1, None
     print(f"\nFetching COP data: {START_DATE} → {END_DATE}\n")
@@ -82,24 +82,26 @@ def fetch_all(token, esr_ids):
             fields = [f["name"] for f in fields]
         if total is None:
             total = meta.get("totalRecords", 0)
-            print(f"Total records: {total:,} | Columns: {fields}")
+            print(f"Total records: {total:,}")
         if not rows:
             break
+
+        # Debug page 1: show sample resource names to verify matching
+        if page == 1:
+            sample = [dict(zip(fields, r)).get("resourceName","") for r in rows[:50]]
+            unique_sample = sorted(set(sample))[:20]
+            print(f"\n  DEBUG — sample resourceNames from API: {unique_sample}")
+            esr_sample = sorted(list(esr_ids))[:20]
+            print(f"  DEBUG — sample ESR IDs we match against: {esr_sample}\n")
+
         kept = 0
-        sample_names = set()
         for row in rows:
             r = dict(zip(fields, row))
             rname = r.get("resourceName", "")
-            if page == 1 and len(sample_names) < 20:
-                sample_names.add(rname)
-            # Filter to ESRs only
             if rname in esr_ids:
                 all_rows.append(r)
                 kept += 1
-        if page == 1:
-            print(f"\n  DEBUG sample resourceNames from API page 1: {sorted(sample_names)[:20]}")
-            print(f"  DEBUG sample esr_ids we're matching against: {sorted(list(esr_ids))[:20]}\n")
-        print(f"  {len(rows):,} rows, {kept} ESR rows kept (total ESR: {len(all_rows):,})")
+        print(f"  {len(rows):,} rows, {kept} ESR rows kept (total: {len(all_rows):,})")
         if page * PAGE_SIZE >= total or len(rows) < PAGE_SIZE:
             break
         page += 1
@@ -528,17 +530,24 @@ def main():
     # Keep records active during our window
     active = esr_df[esr_df["valid_to"] >= START_DATE].copy()
     active = active.sort_values("valid_from", ascending=False).drop_duplicates("generator_id")
+    # Build ESR lookup — try both generator_id and load_id since API may use either
     active = active.dropna(subset=["generator_id"])
     active = active.rename(columns={"asset":"asset_name","qse":"qse_name"})
-    esr_ids = set(active["generator_id"].tolist())
-    print(f"  {len(esr_ids)} active ESR generator IDs to filter for")
+    esr_gen_ids  = set(active["generator_id"].tolist())
+    esr_load_ids = set(active["load_id"].dropna().tolist()) if "load_id" in active.columns else set()
+    esr_ids = esr_gen_ids | esr_load_ids
+    # Build reverse lookup: any id → generator_id for merging later
+    id_to_gen = {gid: gid for gid in esr_gen_ids}
+    id_to_gen.update({lid: active[active["load_id"]==lid]["generator_id"].iloc[0]
+                      for lid in esr_load_ids if not active[active["load_id"]==lid].empty})
+    print(f"  {len(esr_gen_ids)} generator IDs + {len(esr_load_ids)} load IDs = {len(esr_ids)} total ESR identifiers")
 
     # Auth + fetch
     print("\nStep 1: Authenticating ...")
     token = get_token()
 
     print("\nStep 2: Fetching COP data ...")
-    df = fetch_all(token, esr_ids)
+    df = fetch_all(token, esr_ids, id_to_gen)
 
     if df.empty:
         print("No data returned.")
