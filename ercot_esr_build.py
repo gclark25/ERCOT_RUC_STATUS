@@ -322,7 +322,7 @@ function renderChart(){{
   const datasets=dates.map((d,i)=>{{
     const s=a.series[d];
     return{{label:d+(s.flat?' ⚠':''),
-      data:s.he.map((h,j)=>{{return{{x:h,y:s.hbsoc[j]}}})),
+      data:s.he.map((h,j)=>({{x:h,y:s.hbsoc[j]}})),
       borderColor:s.flat?FLAT_C:PAL[i%PAL.length],
       backgroundColor:'transparent',
       borderWidth:s.flat?2.5:1.2,
