@@ -86,12 +86,19 @@ def fetch_all(token, esr_ids):
         if not rows:
             break
         kept = 0
+        sample_names = set()
         for row in rows:
             r = dict(zip(fields, row))
+            rname = r.get("resourceName", "")
+            if page == 1 and len(sample_names) < 20:
+                sample_names.add(rname)
             # Filter to ESRs only
-            if r.get("resourceName") in esr_ids:
+            if rname in esr_ids:
                 all_rows.append(r)
                 kept += 1
+        if page == 1:
+            print(f"\n  DEBUG sample resourceNames from API page 1: {sorted(sample_names)[:20]}")
+            print(f"  DEBUG sample esr_ids we're matching against: {sorted(list(esr_ids))[:20]}\n")
         print(f"  {len(rows):,} rows, {kept} ESR rows kept (total ESR: {len(all_rows):,})")
         if page * PAGE_SIZE >= total or len(rows) < PAGE_SIZE:
             break
