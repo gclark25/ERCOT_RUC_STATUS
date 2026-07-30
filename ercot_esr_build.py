@@ -66,14 +66,43 @@ def load_and_process():
     df = df.drop_duplicates(subset=["resource","date","he"], keep="last")
     print(f"  After dedup: {len(df):,} rows (removed {before-len(df):,} duplicate COP revisions)")
 
-    # Load asset metadata
+    # Load asset metadata for supplementary fields (name, owner, zone)
     print(f"Loading {ESR_CSV} ...")
     meta = pd.read_csv(ESR_CSV)
     meta["valid_to"] = pd.to_datetime(meta["valid_to"])
     meta = meta[meta["valid_to"] >= START_DATE]
     meta = meta.sort_values("valid_from", ascending=False).drop_duplicates("generator_id")
     meta = meta.dropna(subset=["generator_id"])
-    meta = meta.rename(columns={"asset":"asset_name","qse":"qse_name"})
+    meta = meta.rename(columns={"asset":"asset_name","qse":"qse_csv"})
+
+    # Build core-name lookup for fuzzy matching
+    def get_core(n):
+        n = str(n).upper()
+        for s in ['_ESR1','_ESR2','_ESR3','_ESR4','_BESS1','_BESS2','_BESS3',
+                  '_BESS_GEN','_GEN','_UNIT1','_RN','_ALL','_BATTERY1',
+                  '_BATTERY2','_BATTERY','_BES1','_BES2','_ESS1']:
+            n = n.replace(s,'')
+        return n.strip()
+
+    meta["core"] = meta["generator_id"].apply(get_core)
+    meta["sp_core"] = meta["settlement_point_name"].apply(lambda x: get_core(x) if pd.notna(x) else '')
+    meta_gen = {r["core"]: r for _, r in meta.iterrows() if r["core"]}
+    meta_sp  = {r["sp_core"]: r for _, r in meta.iterrows() if r["sp_core"]}
+
+    def lookup_meta(resource):
+        core = get_core(resource)
+        return meta_gen.get(core) or meta_sp.get(core)
+
+    # Add supplementary columns — use API qse/hsl directly, CSV for name/owner/zone
+    df["asset_name"]   = df["resource"].apply(lambda r: str(lookup_meta(r)["asset_name"]) if lookup_meta(r) is not None and pd.notna(lookup_meta(r)["asset_name"]) else r)
+    df["owner"]        = df["resource"].apply(lambda r: str(lookup_meta(r)["owner"]) if lookup_meta(r) is not None and pd.notna(lookup_meta(r)["owner"]) else "")
+    df["zone"]         = df["resource"].apply(lambda r: str(lookup_meta(r)["zone"]) if lookup_meta(r) is not None and pd.notna(lookup_meta(r)["zone"]) else "")
+    df["rated_mw"]     = df["resource"].apply(lambda r: float(lookup_meta(r)["rated_power_mw"]) if lookup_meta(r) is not None and pd.notna(lookup_meta(r)["rated_power_mw"]) else None)
+
+    # QSE and HSL come directly from the API — these are always populated
+    # qse column already exists from raw CSV rename above
+    # hsl column already exists from highSustainedLimit in raw data
+    # Use API HSL per-hour for soc_pct; use rated_mw as fallback display value
 
     # Flag flat days: all HE readings identical for (resource, date)
     def is_flat(vals):
@@ -86,12 +115,6 @@ def load_and_process():
                     .rename(columns={"hbsoc":"is_flat"}))
     df = df.merge(flat_flags, on=["resource","date"], how="left")
     df["is_flat"] = df["is_flat"].fillna(False)
-
-    # Merge metadata
-    df = df.merge(
-        meta[["generator_id","asset_name","rated_power_mw","zone","owner","qse_name"]],
-        left_on="resource", right_on="generator_id", how="left"
-    )
 
     df = df.sort_values(["resource","date","he"]).reset_index(drop=True)
 
@@ -128,11 +151,11 @@ def build_summary(df):
             }
         summary.append({
             "resource":   res,
-            "asset_name": str(meta_row.get("asset_name", res)),
-            "qse":        str(meta_row.get("qse_name", meta_row.get("qse", ""))),
-            "hsl":        float(meta_row.get("hsl", meta_row.get("rated_power_mw", 0)) or 0),
-            "zone":       str(meta_row.get("zone", "")),
-            "owner":      str(meta_row.get("owner", "")),
+            "asset_name": str(meta_row.get("asset_name", res)) if str(meta_row.get("asset_name","")) not in ("nan","") else res,
+            "qse":        str(meta_row.get("qse",""))  if str(meta_row.get("qse",""))  not in ("nan","") else "",
+            "hsl":        float(meta_row["hsl"]) if pd.notna(meta_row.get("hsl")) and meta_row.get("hsl",0) != 0 else (float(meta_row["rated_mw"]) if pd.notna(meta_row.get("rated_mw")) else 0),
+            "zone":       str(meta_row.get("zone","")) if str(meta_row.get("zone","")) not in ("nan","") else "",
+            "owner":      str(meta_row.get("owner","")) if str(meta_row.get("owner","")) not in ("nan","") else "",
             "flat_days":  flat_days,
             "flat_count": len(flat_days),
             "series":     series,
