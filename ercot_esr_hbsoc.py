@@ -59,23 +59,57 @@ def headers(token):
             "Accept": "application/json"}
 
 # ── FETCH ─────────────────────────────────────────────────────────────────────
-def fetch_page(hdrs, page):
-    resp = requests.get(f"{BASE_URL}{ENDPOINT}", headers=hdrs, params={
+RESUME_PAGE = 1      # Change this to resume from a specific page if interrupted
+SAVE_EVERY  = 50     # Save progress to CSV every N pages as a checkpoint
+
+def fetch_page(hdrs, page, retries=3):
+    url = f"{BASE_URL}{ENDPOINT}"
+    params = {
         "deliveryDateFrom": START_DATE, "deliveryDateTo": END_DATE,
         "size": PAGE_SIZE, "page": page,
-    }, timeout=60)
-    if resp.status_code == 401: raise PermissionError("401 Unauthorized")
-    resp.raise_for_status()
-    return resp.json()
+    }
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, headers=hdrs, params=params, timeout=120)
+            if resp.status_code == 401: raise PermissionError("401 Unauthorized")
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+            if attempt < retries - 1:
+                wait = (attempt + 1) * 10
+                print(f"\n  Timeout on page {page}, retrying in {wait}s (attempt {attempt+2}/{retries})...", end=" ")
+                time.sleep(wait)
+            else:
+                raise
+    return None
 
 def fetch_all(token):
     hdrs = headers(token)
-    all_rows, page, total = [], 1, None
+    all_rows, total = [], None
+    hbsoc_idx = None
+
+    # Load existing checkpoint if resuming
+    checkpoint_file = "ercot_esr_hbsoc_checkpoint.csv"
+    if RESUME_PAGE > 1 and os.path.exists(checkpoint_file):
+        print(f"  Loading checkpoint from {checkpoint_file} ...")
+        checkpoint_df = pd.read_csv(checkpoint_file)
+        all_rows = checkpoint_df.to_dict("records")
+        print(f"  Resumed with {len(all_rows):,} rows from checkpoint")
+
     print(f"\nFetching COP data: {START_DATE} → {END_DATE}")
-    print("Filtering to resources with hourBeginningPlannedSOC values (ESRs only) ...\n")
+    print(f"Starting from page {RESUME_PAGE} ...\n")
+
+    page = RESUME_PAGE
     while True:
-        print(f"  Page {page}" + (f"/{-(-total//PAGE_SIZE)}" if total else "") + " ...", end=" ")
-        data = fetch_page(hdrs, page)
+        print(f"  Page {page}" + (f"/{-(-total//PAGE_SIZE)}" if total else "") + " ...", end=" ", flush=True)
+        try:
+            data = fetch_page(hdrs, page)
+        except Exception as e:
+            print(f"\n  Fatal error on page {page}: {e}")
+            print(f"  Saving checkpoint at page {page} — set RESUME_PAGE = {page} to continue")
+            pd.DataFrame(all_rows).to_csv(checkpoint_file, index=False)
+            break
+
         meta   = data.get("_meta", {})
         fields = data.get("fields", [])
         rows   = data.get("data", [])
@@ -83,25 +117,31 @@ def fetch_all(token):
             fields = [f["name"] for f in fields]
         if total is None:
             total = meta.get("totalRecords", 0)
-            print(f"Total records: {total:,}")
-            # Find hbsoc column index once
             hbsoc_idx = fields.index("hourBeginningPlannedSOC") if "hourBeginningPlannedSOC" in fields else None
-            print(f"  hourBeginningPlannedSOC column index: {hbsoc_idx}")
+            print(f"Total records: {total:,} | hbsoc col idx: {hbsoc_idx}")
         if not rows:
             break
+
         kept = 0
         for row in rows:
-            # Only keep rows where hbsoc is not null/zero — these are ESRs
-            if hbsoc_idx is not None:
-                hbsoc_val = row[hbsoc_idx]
-                if hbsoc_val is not None and hbsoc_val != 0:
-                    all_rows.append(dict(zip(fields, row)))
-                    kept += 1
-        print(f"  {len(rows):,} rows, {kept} ESR rows kept (total: {len(all_rows):,})")
+            if hbsoc_idx is not None and row[hbsoc_idx] is not None and row[hbsoc_idx] != 0:
+                all_rows.append(dict(zip(fields, row)))
+                kept += 1
+        print(f"  {len(rows):,} rows, {kept} ESR kept (total: {len(all_rows):,})", flush=True)
+
+        # Checkpoint save every N pages
+        if page % SAVE_EVERY == 0:
+            pd.DataFrame(all_rows).to_csv(checkpoint_file, index=False)
+            print(f"  [Checkpoint saved at page {page}]")
+
         if page * PAGE_SIZE >= total or len(rows) < PAGE_SIZE:
+            # Clean up checkpoint on successful completion
+            if os.path.exists(checkpoint_file):
+                os.remove(checkpoint_file)
             break
         page += 1
         time.sleep(SLEEP_SEC)
+
     return pd.DataFrame(all_rows)
 
 # ── PROCESS ───────────────────────────────────────────────────────────────────
