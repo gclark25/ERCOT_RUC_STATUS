@@ -183,6 +183,12 @@ def process(df, asset_meta):
     df["is_flat"] = df["is_flat"].fillna(False)
 
     df = df.sort_values(["resource","date","he"]).reset_index(drop=True)
+
+    # Deduplicate to one row per (resource, date, he) — keep last (most recent COP update)
+    # This is critical to keep the dashboard JSON small — ERCOT posts multiple COP revisions per hour
+    df = df.drop_duplicates(subset=["resource","date","he"], keep="last").reset_index(drop=True)
+    print(f"  After dedup: {len(df):,} rows (one per resource/date/HE)")
+
     return df
 
 # ── BUILD DASHBOARD ───────────────────────────────────────────────────────────
@@ -204,7 +210,7 @@ def build_dashboard(df):
             key = pd.Timestamp(d).strftime("%m/%d/%Y")
             series[key] = {
                 "he":    ddf["he"].tolist(),
-                "hbsoc": ddf["hbsoc"].tolist(),
+                "hbsoc": [round(v, 1) if pd.notna(v) else None for v in ddf["hbsoc"].tolist()],
                 "flat":  bool(ddf["is_flat"].any()),
             }
         summary.append({
@@ -544,7 +550,8 @@ document.getElementById('show-flat-only').addEventListener('change', renderChart
 
     with open(OUTPUT_HTML, "w") as f:
         f.write(html)
-    print(f"  Saved dashboard: {OUTPUT_HTML}")
+    size_mb = os.path.getsize(OUTPUT_HTML) / 1024 / 1024
+    print(f"  Saved dashboard: {OUTPUT_HTML} ({size_mb:.1f} MB)")
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
